@@ -1,0 +1,95 @@
+# rum: Comprehensive Reference & Technical Documentation
+
+rum is a next-generation, blazingly fast RPM package manager written in Rust, built as a modern drop-in replacement for DNF4, DNF5, and YUM on Enterprise Linux distributions.
+
+## Distribution Compatibility
+
+rum natively supports:
+- **Red Hat Enterprise Linux (RHEL)**: 8.x, 9.x, 10.x
+- **AlmaLinux**: 8.x, 9.x, 10.x
+- **Rocky Linux**: 8.x, 9.x, 10.x
+- **Oracle Linux**: 8.x, 9.x, 10.x
+- **Amazon Linux 2023**: AL2023 (el9-compatible)
+- **CentOS Stream**: 8, 9, 10
+- **Fedora**: Modern releases
+
+Target Architectures:
+- `x86_64` (AMD64)
+- `aarch64` (ARM64)
+
+## Why Was rum Created? (Addressing YUM / DNF Slowness)
+
+For years, developers and DevOps engineers on Enterprise Linux have encountered major performance bottlenecks with YUM and DNF:
+1. **Python Runtime & Hawkey Overhead in DNF4**: Starting Python and instantiating C++ Hawkey bindings incurs 1–3 seconds of latency before any packages are evaluated.
+2. **Repomd XML Parsing Delays**: Standard repodata (`primary.xml.gz` or `repomd.xml`) requires unpacking and parsing tens of megabytes of XML on every repository refresh.
+3. **Severe Memory Consumption & OOM Crashes**: DNF routinely consumes 150MB to 300MB+ RSS when computing dependency graphs. In 512MB or 1GB RAM CI runners, Docker containers, and edge VPS instances, running `yum install` or `dnf upgrade` frequently triggers the Linux kernel Out-Of-Memory (OOM) killer.
+4. **Weak Dependency Bloat**: Traditional DNF pulls in all `Recommends:` and `Suggests:` packages by default, swelling container sizes and increasing vulnerability surface area.
+5. **Slow Solver Backtracking**: Traditional solvers hit combinatorial explosions when resolving complex boolean rich dependencies.
+
+## How rum Solves These Problems
+
+### 1. Zero-Copy Binary Metadata Cache (`rkyv`)
+Instead of parsing XML on each execution, rum compiles downloaded repository metadata into an `rkyv`-serialized binary structure (`primary.rkyv`). `rkyv` supports zero-copy deserialization: the binary data is mapped directly into memory, and pointers point directly into the mapped buffer. Lookups for package names and capabilities occur in sub-millisecond time.
+
+### 2. Conflict-Driven Clause Learning (CDCL) SAT Resolver
+rum integrates `resolvo`, an industrial-grade Boolean SAT solver. Resolvo models package dependencies, version constraints, conflicts, obsoletes, and rich dependencies (`(A or B)`, `(A and B)`, `(A if B else C)`) as SAT clauses. If a conflict is encountered, clause learning prunes entire branches of the search space, delivering solution sets in under 0.5s without backtracking stalls.
+
+### 3. Glibc Arena Bounding (`mallopt`)
+In multi-threaded Tokio asynchronous runtimes on Linux, the default glibc memory allocator creates up to $8 \times \text{cores}$ memory arenas. This causes aggressive virtual memory fragmentation and massive RSS spikes. rum calls `mallopt(M_ARENA_MAX, 2)` at initialization, restricting memory arenas and keeping peak RSS strictly below 35MB.
+
+### 4. Direct `librpm` FFI Integration
+Rather than executing external `rpm` sub-processes for package queries, rum links directly against the host's native `librpm.so`. Database reads and transaction commits execute directly via C FFI with zero process-spawn overhead.
+
+### 5. Scoped-Present Erases & Upgrade Transactions
+During `upgrade-all` or `install` operations involving package replacements, rum models installed packages in a scoped-present set. Obsoletes and conflicts are evaluated during resolution, scheduling old packages for atomic removal while preserving system-critical packages (`setup`, `systemd`, running kernel).
+
+## Command Line Interface (CLI) Reference
+
+### `rum install [OPTIONS] <PACKAGES>...`
+Installs target packages and their dependency closures.
+- `--no-weak-deps`: Excludes `Recommends:` and `Suggests:`, resolving only mandatory `Requires:`.
+- `--nodocs`: Configures transaction flags to skip installing documentation and manpages.
+- `-y`, `--assumeyes`: Automatically confirms transaction execution.
+
+### `rum upgrade-all [OPTIONS]`
+Performs a system-wide upgrade. Resolves obsolete packages, updates co-built siblings in lockstep, and prunes older installed kernels according to `installonly_limit`.
+
+### `rum erase [OPTIONS] <PACKAGES>...`
+Safely removes installed packages. Refuses removal of protected system packages or the active running kernel.
+
+### `rum download [OPTIONS] <PACKAGES>...`
+Downloads packages and dependencies to a local directory without installing.
+- `--destdir <PATH>`: Destination directory for downloaded RPMs.
+
+### `rum check-update`
+Checks enabled repositories for available package updates and exits with status code:
+- `100`: Updates are available.
+- `0`: No updates available.
+- `1`: Error encountered.
+
+### `rum clean [OPTIONS] [all|metadata|packages]`
+Cleans cached data.
+- `rum clean all`: Removes zero-copy metadata caches, XML repomd, and cached RPM archives.
+
+### `rum repolist`
+Displays all configured repositories (`/etc/yum.repos.d/*.repo` and `/etc/dnf/dnf.conf`) and their enabled/disabled status.
+
+## Installation Methods
+
+### Automated Shell Script (Recommended)
+```sh
+curl -fsSL https://getrum.sh/install.sh | sh
+```
+
+### Manual Binary Download
+Download the latest release tarball for your architecture and Enterprise Linux generation from:
+`https://github.com/getrum-sh/rum/releases`
+
+Example:
+```sh
+tar -xzf rum-v0.1.0-x86_64-el9.tar.gz
+sudo install -m 0755 rum /usr/local/bin/rum
+```
+
+## Licensing
+rum is open-source software licensed under the **Apache License, Version 2.0**.

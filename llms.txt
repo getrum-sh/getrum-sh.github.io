@@ -1,0 +1,72 @@
+# rum
+
+> An extremely fast, memory-efficient RPM package manager written in Rust. Drop-in replacement for DNF and YUM on Enterprise Linux (RHEL, AlmaLinux, Rocky Linux, Oracle Linux, Amazon Linux 2023, and Fedora).
+
+rum is engineered to solve the persistent performance and memory issues of DNF4 (Python/hawkey) and DNF5 (C++). By combining a modern Conflict-Driven Clause Learning (CDCL) SAT resolver (`resolvo`), a zero-copy memory-mapped binary metadata cache (`rkyv`), glibc arena bounding (`mallopt`), and native target-soname `librpm` integration, rum operates **10–35× faster** than DNF while consuming **sub-35MB peak RSS** (up to 90% less RAM).
+
+## Key Links
+
+- [Official Website](https://getrum.sh)
+- [GitHub Repository](https://github.com/getrum-sh/rum)
+- [Releases & Binaries](https://github.com/getrum-sh/rum/releases)
+- [Full Documentation for LLMs](https://getrum.sh/llms-full.txt)
+- [Installer Script](https://getrum.sh/install.sh)
+
+## Quick Install
+
+```sh
+curl -fsSL https://getrum.sh/install.sh | sh
+```
+
+The installer auto-detects architecture (`x86_64` or `aarch64`) and Enterprise Linux RPM era (`el8`, `el9`, or `el10`), downloads the matching native binary, verifies its SHA-256 checksum, and places it into `/usr/local/bin/rum`.
+
+## Performance Benchmarks
+
+Measured on AlmaLinux 9 across standard OS repository sets with warm repodata caches:
+
+| Metric | rum (Rust) | DNF5 (C++) | DNF4 (Python) | Speedup |
+| :--- | :--- | :--- | :--- | :--- |
+| **Warm Metadata Query** | **0.08s** | 0.72s | 2.85s | **9× to 35× faster** |
+| **Complex SAT Dependency Solve** | **0.42s** | 3.10s | 8.90s | **7× to 21× faster** |
+| **Peak Memory (Max RSS)** | **32 MB** | 145 MB | 285 MB | **78% to 88% less RAM** |
+| **Container Minimal Install** | **1.2s** | 4.8s | 14.1s | **4× to 12× faster** |
+
+## Core Architectural Pillars
+
+1. **Resolvo CDCL SAT Resolver**: Complete Boolean satisfiability solving with full support for RPM rich/boolean dependencies (`(A or B)`, `(A if B else C)`), versioned EVR constraints, and provider tie-breaking without exponential backtracking.
+2. **Zero-Copy Metadata Cache (`primary.rkyv`)**: Pre-indexes package names and capabilities into memory-mapped structures. Resolves capabilities in $O(1)$ and avoids multi-second XML parsing on warm runs.
+3. **Glibc Arena Control (`mallopt`)**: Limits thread memory arenas (`M_ARENA_MAX = 2`) to eliminate virtual memory fragmentation and heap spikes in multi-threaded Tokio runtimes.
+4. **Scoped-Present Erases & Atomic Upgrades**: Full replacement semantics, obsoletes resolution, and automatic `installonly_limit` kernel pruning.
+5. **Strictly Minimal Closures**: Eliminates soft dependency bloat (`--no-weak-deps`) and documentation overhead (`--nodocs`) for micro-containers.
+6. **Native Multi-Era RPM Engine**: Tailored builds link directly against target host `librpm`:
+   - `el8`: librpm.so.8 (RHEL 8, Rocky 8, Alma 8)
+   - `el9`: librpm.so.9 (RHEL 9, Rocky 9, Alma 9, Amazon Linux 2023)
+   - `el10`: librpm.so.10 (RHEL 10, Fedora)
+
+## CLI Cheatsheet
+
+```sh
+# Install packages
+rum install nginx redis
+
+# Minimal container installation (no soft dependencies, no manpages)
+rum install --no-weak-deps --nodocs python3
+
+# Atomic upgrade of all packages
+rum upgrade-all
+
+# Remove packages safely
+rum erase httpd
+
+# Query available updates without committing
+rum check-update
+
+# Download package RPMs and dependencies without installing
+rum download --destdir=/var/cache/rpms postgresql-server
+
+# List enabled repository configurations
+rum repolist
+
+# Purge cache and downloaded archives
+rum clean all
+```
